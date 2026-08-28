@@ -16,10 +16,10 @@
   "author": "Megan Holstein",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/REPO.git"
+    "url": "git+https://github.com/megan-holstein/next-edit-mode.git"
   },
-  "homepage": "https://github.com/OWNER/REPO#readme",
-  "bugs": "https://github.com/OWNER/REPO/issues",
+  "homepage": "https://github.com/megan-holstein/next-edit-mode#readme",
+  "bugs": "https://github.com/megan-holstein/next-edit-mode/issues",
   "type": "module",
   "bin": {
     "next-edit-mode": "./install.mjs"

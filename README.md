@@ -35,7 +35,7 @@ Both project layouts are supported: `src/app/…` and a top-level `app/…`.
 ## Installing it in a project
 
 ```sh
-git clone https://github.com/OWNER/REPO.git ~/tools/edit-mode
+git clone https://github.com/megan-holstein/next-edit-mode.git ~/tools/edit-mode
 node ~/tools/edit-mode/install.mjs /path/to/your/project
 ```
 
