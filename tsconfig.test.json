@@ -1,0 +1,21 @@
+/* The engine, compiled to CommonJS so `node --test` can load it.
+ *
+ * The tool's own source is ESM TypeScript with extensionless relative imports,
+ * which is what a bundler expects and what Node's ESM resolver refuses. Rather
+ * than rewrite every specifier for the benefit of the tests, the tests run
+ * against a CommonJS build in a gitignored directory. `overlay.tsx` is left out
+ * of it: nothing under test imports the browser half, and compiling it would
+ * drag React into a test run that has no use for it.
+ */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": ".test-build",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts"]
+}

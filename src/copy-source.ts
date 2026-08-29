@@ -29,6 +29,21 @@
  * on every .tsx file and the tool reported perfectly ordinary copy as
  * unfindable. `process` is a runtime global no bundler rewrites, so the
  * `createRequire` reached through it is Node's own.
+ *
+ * A SAVE IS A SPLICE INTO THE FILE AS IT STANDS AT THE MOMENT OF WRITING, AND
+ * NEVER A REWRITE FROM AN EARLIER READ. This is the one invariant here worth
+ * stating on its own, because breaking it destroys work rather than merely
+ * failing. Finding the sentence means reading and parsing every candidate file
+ * in the source directory, which takes long enough for somebody else — a person
+ * in an editor, a coding agent in the same tree — to write one of those files
+ * while the search is still running. Version 1.0.0 composed the write from the
+ * buffer the SEARCH had read, so every byte outside the replaced span came from
+ * a file that no longer existed, and any edit made in that window was silently
+ * reverted by a save that reported success. So the chosen file is read again,
+ * parsed again, and the sentence located again in THAT content; the write is a
+ * slice of that read with one span replaced, and `editCopy` asserts as much
+ * before the write rather than trusting itself. If the sentence is no longer
+ * there, nothing is written and the answer says so.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -342,6 +357,14 @@ function sitesInMarkdown(file: string, source: string): Site[] {
   ];
 }
 
+/** Every place in one file that could be the sentence, by the file's own rules. */
+function sitesIn(file: string, source: string): Site[] {
+  const extension = path.extname(file);
+  return extension === ".ts" || extension === ".tsx"
+    ? sitesInTypeScript(file, source)
+    : sitesInMarkdown(file, source);
+}
+
 /* --------------------------------------------------------------- finding */
 
 type Hit = {
@@ -369,6 +392,22 @@ function hitsInSite(site: Site, oldText: string): Hit[] {
     inner,
     exact: false,
   }));
+}
+
+/**
+ * Every hit in one file, with the same preference the sweep applies across all
+ * of them: an exact whole-literal match outranks a sentence that merely occurs
+ * inside a longer one. Consistent by construction — the sweep only ever settles
+ * on a fragment when no file held an exact match, so a file reached with a
+ * fragment in hand has no exact match to shadow it.
+ */
+function hitsIn(sites: Site[], oldText: string): Hit[] {
+  const exact: Hit[] = [];
+  const fragment: Hit[] = [];
+  for (const site of sites) {
+    for (const hit of hitsInSite(site, oldText)) (hit.exact ? exact : fragment).push(hit);
+  }
+  return exact.length ? exact : fragment;
 }
 
 function lineOf(source: string, offset: number): number {
@@ -525,6 +564,108 @@ function rankCandidates(candidates: Candidate[], pagePath?: string): Candidate[]
   );
 }
 
+/* --------------------------------------------------------------- writing */
+
+/**
+ * The exact range of a file a save is allowed to touch, and what goes in it.
+ *
+ * A markdown site is the whole file, so ITS span would authorize rewriting
+ * every byte — and an assertion that the write left the rest of the file alone
+ * would be vacuously true. The inner offsets are file offsets for markdown, so
+ * the splice is taken from those instead, which makes a markdown save as narrow
+ * as a TypeScript one and gives the assertion something real to check.
+ */
+type Splice = { start: number; end: number; replacement: string };
+
+/** Throws `jsx-unsafe` by way of `site.encode`; the caller has words for it. */
+function spliceFor(hit: Hit, newText: string): Splice {
+  const { site, inner } = hit;
+  if (site.kind === "markdown") {
+    return { start: inner.start, end: inner.end, replacement: newText };
+  }
+  const nextValue =
+    site.value.slice(0, inner.start) + newText + site.value.slice(inner.end);
+  return {
+    start: site.span.start,
+    end: site.span.end,
+    replacement: site.encode(nextValue),
+  };
+}
+
+type WriteTarget = { hit: Hit; source: string } | { result: EditResult };
+
+/**
+ * Read the chosen file AGAIN, parse it again, and find the sentence in what is
+ * there now. Everything a save writes comes from this read; nothing comes from
+ * the sweep's.
+ *
+ * The three outcomes are the three things the file can have become. Still one
+ * occurrence: write it. None: somebody changed that sentence between the page
+ * loading and the button being pressed, so refuse and say so, because a save
+ * here would be a guess at where the words went. More than one: the file gained
+ * a copy, and the ordinary picker is the right answer to that — except in the
+ * case where the count is unchanged, which is every ordinary save of a sentence
+ * that legitimately appears twice, and where the occurrence the ladder settled
+ * on is still the same one by position.
+ */
+async function resolveAtWriteTime(
+  chosen: Hit,
+  oldText: string,
+  request: EditRequest,
+  root: string,
+  place: { ordinal: number; count: number }
+): Promise<WriteTarget> {
+  const file = chosen.site.file;
+  const source = await fs.readFile(file, "utf8");
+
+  let sites: Site[];
+  try {
+    sites = sitesIn(file, source);
+  } catch (error) {
+    return {
+      result: {
+        status: "error",
+        message: `${path.relative(root, file)} does not parse as it now stands, so nothing was written. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        tone: "alarm",
+      },
+    };
+  }
+
+  const hits = hitsIn(sites, oldText);
+
+  if (hits.length === 0) {
+    return {
+      result: {
+        status: "none",
+        message:
+          "That sentence changed on disk since the page loaded — reload and retry. Nothing was written.",
+        tone: "note",
+      },
+    };
+  }
+  if (hits.length === 1) return { hit: hits[0], source };
+
+  if (place.ordinal >= 0 && hits.length === place.count) {
+    return { hit: hits[place.ordinal], source };
+  }
+
+  const winner = narrowByContext(hits, new Map([[file, source]]), root, request);
+  if (winner) return { hit: winner, source };
+
+  return {
+    result: {
+      status: "multiple",
+      candidates: rankCandidates(
+        hits.map((one) => toCandidate(one, source, root)),
+        request.pagePath
+      ),
+      tone: "question",
+    },
+  };
+}
+
 export async function editCopy(request: EditRequest): Promise<EditResult> {
   const oldText = normalize(request.oldText ?? "");
   const newText = normalize(request.newText ?? "");
@@ -580,13 +721,9 @@ export async function editCopy(request: EditRequest): Promise<EditResult> {
     const source = await fs.readFile(file, "utf8");
     if (probe && !source.includes(probe)) continue;
     sources.set(file, source);
-    const extension = path.extname(file);
     let sites: Site[];
     try {
-      sites =
-        extension === ".ts" || extension === ".tsx"
-          ? sitesInTypeScript(file, source)
-          : sitesInMarkdown(file, source);
+      sites = sitesIn(file, source);
     } catch (error) {
       // A file that will not parse is skipped rather than guessed at — but say
       // so in the dev server's log, because a silent skip is how a tool starts
@@ -604,6 +741,10 @@ export async function editCopy(request: EditRequest): Promise<EditResult> {
   // An exact whole-literal match is what almost every edit is, and it outranks
   // a sentence that merely occurs inside a longer literal somewhere else.
   let hits = exactHits.length ? exactHits : fragmentHits;
+  // The unnarrowed set, kept because the write needs to know WHICH occurrence
+  // in the file the ladder settled on, and every narrowing below replaces the
+  // array rather than mutating it.
+  const pool = hits;
 
   if (request.target) {
     if (!insideSrc(path.join(root, request.target.file))) {
@@ -685,17 +826,21 @@ export async function editCopy(request: EditRequest): Promise<EditResult> {
     };
   }
 
-  const source = sources.get(hit.site.file)!;
-  const candidate = toCandidate(hit, source, root);
+  // EVERYTHING BELOW THIS LINE WORKS FROM A FRESH READ. The sweep's buffers are
+  // a search index and nothing more; see the note at the top of the file.
+  const siblings = pool.filter((other) => other.site.file === hit.site.file);
+  const settled = await resolveAtWriteTime(hit, oldText, request, root, {
+    ordinal: siblings.indexOf(hit),
+    count: siblings.length,
+  });
+  if ("result" in settled) return settled.result;
 
-  const nextValue =
-    hit.site.value.slice(0, hit.inner.start) +
-    newText +
-    hit.site.value.slice(hit.inner.end);
+  const { hit: target, source: current } = settled;
+  const candidate = toCandidate(target, current, root);
 
-  let encoded: string;
+  let splice: Splice;
   try {
-    encoded = hit.site.encode(nextValue);
+    splice = spliceFor(target, newText);
   } catch (error) {
     if (error instanceof Error && error.message === "jsx-unsafe") {
       return {
@@ -708,12 +853,30 @@ export async function editCopy(request: EditRequest): Promise<EditResult> {
   }
 
   const updated =
-    source.slice(0, hit.site.span.start) + encoded + source.slice(hit.site.span.end);
+    current.slice(0, splice.start) + splice.replacement + current.slice(splice.end);
 
-  if (updated === source) {
+  if (updated === current) {
     return { status: "error", message: "The file already reads that way.", tone: "note" };
   }
 
-  await fs.writeFile(hit.site.file, updated, "utf8");
+  // The write is a splice, and this is the proof rather than the intention.
+  // Every byte outside the replaced span has to be the byte the fresh read
+  // found there. It cannot fail as the code stands, since `updated` is cut from
+  // `current` — it is here so that it WOULD fail if some later version printed a
+  // whole node back or reached for an older buffer, which is precisely the
+  // defect this path exists to make impossible.
+  if (
+    updated.slice(0, splice.start) !== current.slice(0, splice.start) ||
+    updated.slice(splice.start + splice.replacement.length) !== current.slice(splice.end)
+  ) {
+    return {
+      status: "error",
+      message:
+        "The save would have rewritten more of the file than the sentence it was asked to change, so nothing was written. That is a fault in this tool rather than anything you did.",
+      tone: "alarm",
+    };
+  }
+
+  await fs.writeFile(target.site.file, updated, "utf8");
   return { status: "saved", file: candidate.file, line: candidate.line, resolvedBy };
 }

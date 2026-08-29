@@ -185,6 +185,27 @@ which refuses any specifier it cannot resolve at build time — `process` is a
 runtime global no bundler rewrites, so the `createRequire` reached through it is
 Node's own.
 
+### A save is a splice into the file as it stands
+
+Finding the sentence means reading and parsing every candidate file in the
+source directory, and that takes long enough for somebody else to write one of
+those files while the search is still running — a person in an editor, a coding
+agent working in the same tree. So the search's buffers are treated as an index
+and nothing else. When the tool has settled on one occurrence it reads that file
+again, parses it again, and locates the sentence in *that* content; the write is
+that fresh read with a single span replaced, and the engine asserts that every
+byte outside the span survived before it writes anything.
+
+Three outcomes, because there are three things the file can have become. Still
+one occurrence: it is saved. None: the sentence changed under you between the
+page loading and the button being pressed, so nothing is written and the panel
+says to reload and retry. More than one: the file gained a copy, and the picker
+is the right answer to that.
+
+Version 1.0.0 composed the write from the buffer the *search* had read, so every
+byte outside the replaced span came from a file that no longer existed. An edit
+made in that window was reverted by a save that reported success.
+
 ### Telling two identical sentences apart
 
 The same words often live in two files: a validation message in the account area
@@ -363,6 +384,7 @@ host's, so a production stylesheet has nothing of this in it even by accident.
 | `src/git.ts` | The small amount of git, and the containment rule. |
 | `src/config.ts` | Everything a project might set, read from the environment. |
 | `install.mjs` | Mounting it in a project. |
+| `test/` | `npm test`. The engine is compiled to CommonJS and driven against a throwaway project, with `fs.promises.readFile` wrapped so another writer's edit lands inside the search window deterministically. |
 
 ## License
 
