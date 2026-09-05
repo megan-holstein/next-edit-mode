@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.3
+
+Fixes the ring drawn around a run of text that wraps.
+
+- **A wrapped run is ringed once, as the block it fills.** A browser draws an
+  outline on inline text one box per line, so `<p><span>the whole
+  paragraph</span></p>` — the shape most content renderers produce, and the
+  commonest editable run on a marketing page — came up ringed line by line,
+  which reads as eight separate runs of text where there is one. The hover and
+  editing rings now hang on the nearest block ancestor whenever the inline run
+  is the only thing that block renders, so the outline is the single rectangle
+  the text occupies. A run that shares its line with other words keeps the
+  per-line boxes, which is what it genuinely is.
+- **What is edited has not moved.** `contenteditable`, the caret, the text read
+  back and the source lookup all still address the run itself; only the ring
+  and its tint changed element.
+
 ## 1.0.2
 
 Fixes a defect that committed other people's work.

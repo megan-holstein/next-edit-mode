@@ -160,6 +160,41 @@ function resolveEditable(node: EventTarget | null): HTMLElement | null {
   return null;
 }
 
+/** True when `el` is the only thing `parent` renders. */
+function fillsParent(el: Element, parent: Element): boolean {
+  for (const child of parent.childNodes) {
+    if (child === el) continue;
+    if (child.nodeType === Node.ELEMENT_NODE) return false;
+    if (child.nodeType === Node.TEXT_NODE && child.nodeValue?.trim()) return false;
+  }
+  return true;
+}
+
+/**
+ * The element the ring is drawn on, which is not always the element being
+ * edited.
+ *
+ * A browser draws an outline on inline text one box per line, so a run that
+ * wraps is ringed line by line rather than as the paragraph it is — and
+ * `<p><span>the whole answer</span></p>` is the shape most content renderers
+ * produce, which made the commonest case on a page look like eight separate
+ * runs of text instead of one. Where the inline run is the only thing in its
+ * block, the block's box is the same box, so outlining that draws the single
+ * rectangle the text actually occupies. A run that shares its line with other
+ * words keeps the per-line boxes, which is what it genuinely is.
+ */
+function highlightTarget(el: HTMLElement): HTMLElement {
+  let current: HTMLElement = el;
+  while (getComputedStyle(current).display.startsWith("inline")) {
+    const parent = current.parentElement;
+    if (!parent || parent === document.body) break;
+    if (OPAQUE.has(parent.tagName) || isOwnUi(parent)) break;
+    if (!fillsParent(current, parent)) break;
+    current = parent;
+  }
+  return current;
+}
+
 function collapse(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -277,7 +312,7 @@ export function EditModeOverlay({
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [pending, setPending] = useState<LedgerEntry[]>([]);
 
-  const editing = useRef<{ el: HTMLElement; html: string; runs: string[] } | null>(null);
+  const editing = useRef<{ el: HTMLElement; mark: HTMLElement; html: string; runs: string[] } | null>(null);
   const held = useRef<{
     oldText: string;
     newText: string;
@@ -309,7 +344,7 @@ export function EditModeOverlay({
     const current = editing.current;
     if (!current) return;
     current.el.removeAttribute("contenteditable");
-    current.el.removeAttribute(EDITING_ATTRIBUTE);
+    current.mark.removeAttribute(EDITING_ATTRIBUTE);
     editing.current = null;
   }, []);
 
@@ -442,11 +477,12 @@ export function EditModeOverlay({
     if (editing.current?.el === el) return;
     editing.current = {
       el,
+      mark: highlightTarget(el),
       html: el.innerHTML,
       runs: textNodesOf(el).map((node) => node.nodeValue ?? ""),
     };
     el.setAttribute("contenteditable", "plaintext-only");
-    el.setAttribute(EDITING_ATTRIBUTE, "");
+    editing.current.mark.setAttribute(EDITING_ATTRIBUTE, "");
     el.spellcheck = true;
     el.focus({ preventScroll: true });
 
@@ -489,10 +525,11 @@ export function EditModeOverlay({
     const onMove = (event: MouseEvent) => {
       if (editing.current) return;
       const el = isOwnUi(event.target as Node) ? null : resolveEditable(event.target);
-      if (el === hovered.current) return;
+      const mark = el ? highlightTarget(el) : null;
+      if (mark === hovered.current) return;
       hovered.current?.removeAttribute(HOVER_ATTRIBUTE);
-      hovered.current = el;
-      el?.setAttribute(HOVER_ATTRIBUTE, "");
+      hovered.current = mark;
+      mark?.setAttribute(HOVER_ATTRIBUTE, "");
     };
 
     const onClick = (event: MouseEvent) => {
