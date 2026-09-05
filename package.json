@@ -1,6 +1,6 @@
 {
   "name": "next-edit-mode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Development-only inline copy editing for Next.js: click a sentence on the page, type over it, and the source file that produced it is rewritten.",
   "keywords": [
     "nextjs",

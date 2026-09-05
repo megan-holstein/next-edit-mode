@@ -19,18 +19,61 @@
  * dropped on read — `pendingEdits` asks git whether each remembered file still
  * differs, so the count on the button is what git would actually commit rather
  * than what the tool once did.
+ *
+ * WHY IT RECORDS THE SUBSTITUTIONS THEMSELVES and not merely a count. A count
+ * is enough to label a button and nothing like enough to make a commit. Saving
+ * used to commit each remembered file whole, which took whatever else was in it
+ * — and on 2026-09-04 that meant a coding agent's unfinished work in the same
+ * file went to a branch that deploys, and the build failed. So each edit is
+ * written down as the exact pair it was: the run of text it replaced, and what
+ * replaced it. `commit.ts` rebuilds the file from the last commit by replaying
+ * those pairs, which is how a commit can hold one sentence out of a file that
+ * two people are editing at once.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ledgerPath } from "./config";
 import { git, insideSrc, projectRoot } from "./git";
 
+/**
+ * One edit, as the substitution it performed. `removed` is the run of text that
+ * was in the file before, byte for byte as the file held it; `replacement` is
+ * what the tool put in its place. Together they are enough to redo the edit
+ * against a different copy of the same file, which is what the commit does.
+ */
+export type LedgerSubstitution = {
+  removed: string;
+  replacement: string;
+};
+
 export type LedgerEntry = {
   file: string;
   edits: number;
   /** Every page an edit to this file was made from. Cancel reads it. */
   pages: string[];
+  /**
+   * What each edit to this file replaced, oldest first. Replayed in this order
+   * on top of the file as the last commit holds it; an entry with none of these
+   * is refused at commit time rather than guessed at.
+   */
+  substitutions: LedgerSubstitution[];
 };
+
+function readSubstitutions(value: unknown): LedgerSubstitution[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as LedgerSubstitution).removed === "string" &&
+      typeof (item as LedgerSubstitution).replacement === "string"
+    ) {
+      const { removed, replacement } = item as LedgerSubstitution;
+      return [{ removed, replacement }];
+    }
+    return [];
+  });
+}
 
 async function readRaw(): Promise<LedgerEntry[]> {
   try {
@@ -47,7 +90,17 @@ async function readRaw(): Promise<LedgerEntry[]> {
         // A remembered path that is not inside the source directory is not one
         // this tool wrote, whatever the file says.
         if (!insideSrc(path.join(projectRoot(), file))) return [];
-        return [{ file, edits, pages: Array.isArray(pages) ? pages.filter((v) => typeof v === "string") : [] }];
+        return [
+          {
+            file,
+            edits,
+            pages: Array.isArray(pages) ? pages.filter((v) => typeof v === "string") : [],
+            // Absent in a ledger written by a version that did not record them.
+            // Kept as an empty list rather than invented, so the commit can
+            // refuse the file and say why.
+            substitutions: readSubstitutions((entry as LedgerEntry).substitutions),
+          },
+        ];
       }
       return [];
     });
@@ -64,17 +117,30 @@ async function writeRaw(entries: LedgerEntry[]): Promise<void> {
 
 /**
  * Remember one more edit to `file` (a path relative to the project root), made
- * from `page`. The page is what Cancel works from: it reverts what was typed on
- * the page in front of you, not the whole session.
+ * from `page`, which replaced `substitution.removed` with
+ * `substitution.replacement`. The page is what Cancel works from: it reverts
+ * what was typed on the page in front of you, not the whole session. The
+ * substitution is what Save works from: it is the only record of which part of
+ * the file this tool is entitled to commit.
  */
-export async function recordEdit(file: string, page?: string): Promise<void> {
+export async function recordEdit(
+  file: string,
+  page?: string,
+  substitution?: LedgerSubstitution
+): Promise<void> {
   const entries = await readRaw();
   const existing = entries.find((entry) => entry.file === file);
   if (existing) {
     existing.edits += 1;
     if (page && !existing.pages.includes(page)) existing.pages.push(page);
+    if (substitution) existing.substitutions.push(substitution);
   } else {
-    entries.push({ file, edits: 1, pages: page ? [page] : [] });
+    entries.push({
+      file,
+      edits: 1,
+      pages: page ? [page] : [],
+      substitutions: substitution ? [substitution] : [],
+    });
   }
   await writeRaw(entries);
 }
@@ -89,11 +155,17 @@ export async function forgetFiles(files: string[]): Promise<void> {
  * The ledger, narrowed to files that still differ from HEAD. Anything reverted
  * by hand since it was written is dropped, here and in the stored ledger, so a
  * `git restore` is a complete undo with no residue on the button.
+ *
+ * AGAINST HEAD RATHER THAN AGAINST THE INDEX, which is not a distinction
+ * without a difference. A bare `git diff` compares the working tree with the
+ * index, so a file somebody else STAGED read as unchanged and vanished off the
+ * button — the edit still in the file, counted nowhere, reported to nobody. It
+ * is kept here instead, and the commit refuses it by name and says whose it is.
  */
 export async function pendingEdits(): Promise<LedgerEntry[]> {
   const entries = await readRaw();
   if (entries.length === 0) return [];
-  const changed = await git(["diff", "--name-only", "--", ...entries.map((e) => e.file)]);
+  const changed = await git(["diff", "--name-only", "HEAD", "--", ...entries.map((e) => e.file)]);
   if (changed.code !== 0) return entries; // git unavailable: report what we know
   const live = new Set(changed.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
   const kept = entries.filter((entry) => live.has(entry.file));

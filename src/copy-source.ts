@@ -116,7 +116,21 @@ export type EditRequest = {
 export type Tone = "question" | "note" | "alarm";
 
 export type EditResult =
-  | { status: "saved"; file: string; line: number; resolvedBy: ResolvedBy }
+  | {
+      status: "saved";
+      file: string;
+      line: number;
+      resolvedBy: ResolvedBy;
+      /**
+       * The exact substitution the write performed, which the ledger keeps and
+       * the commit replays. `removed` is the run of the file the splice took
+       * out, byte for byte as the file held it — the encoded form, so a JSX
+       * escape or a wrapped literal is recorded as it sits in the source rather
+       * than as it read on the page.
+       */
+      removed: string;
+      replacement: string;
+    }
   | { status: "none"; message: string; tone: Tone }
   | { status: "multiple"; candidates: Candidate[]; tone: Tone }
   | { status: "error"; message: string; tone: Tone };
@@ -878,5 +892,15 @@ export async function editCopy(request: EditRequest): Promise<EditResult> {
   }
 
   await fs.writeFile(target.site.file, updated, "utf8");
-  return { status: "saved", file: candidate.file, line: candidate.line, resolvedBy };
+  // The substitution is reported as well as performed. It is the whole record
+  // of what this edit is entitled to change, and `commit.ts` rebuilds the file
+  // from the last commit out of these rather than committing the working tree.
+  return {
+    status: "saved",
+    file: candidate.file,
+    line: candidate.line,
+    resolvedBy,
+    removed: current.slice(splice.start, splice.end),
+    replacement: splice.replacement,
+  };
 }

@@ -176,7 +176,7 @@ export const createRevertCopyRoute = dead;
   [relative("app/api/dev/commit-copy/route.ts")]: routeFile(
     `/**
  * GET  /api/dev/commit-copy — what is waiting to be saved.
- * POST /api/dev/commit-copy — commit exactly those files and push.
+ * POST /api/dev/commit-copy — commit exactly those edits and push.
  *
  * Development only, by the same two mechanisms as the edit route beside it.
  */`,

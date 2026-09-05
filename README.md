@@ -127,7 +127,10 @@ honest inside its own boundary:
   is resolved and checked against that root before anything is opened. Your
   config, your scripts, your lockfile and your environment files are unreachable
   from here, whatever a request asks for.
-- **It commits the files it wrote and nothing else** — see the ledger below.
+- **It commits the edits it made and nothing else** — not the files it made
+  them in. The commit is rebuilt from the last one out of the substitutions the
+  ledger recorded, so a colleague's or an agent's unfinished work in the same
+  file is neither committed nor disturbed. See the ledger below.
 - **It sends nothing anywhere.** The client talks to three endpoints on the same
   origin and to nothing else; the server makes no network call of its own. The
   one exception is `git push`, to whatever remote the repository already has.
@@ -250,8 +253,9 @@ has learned nothing and is not trusted over the field it emptied.
 changes in the working tree, and each successful one is recorded in a ledger at
 `.next/cache/edit-mode-ledger.json` — gitignored by the framework's own
 convention, surviving a dev-server restart, thrown away with everything else
-derived. Each entry carries the file, a count, and every page an edit to it was
-made from.
+derived. Each entry carries the file, a count, every page an edit to it was made
+from, and — the part the commit is built out of — the exact substitution each
+edit performed: the run of text it replaced, and what replaced it.
 
 The ledger exists because git cannot tell an edit made through the pencil from
 an edit made in an editor, or by a coding agent working in the same tree at the
@@ -261,17 +265,41 @@ Pressing Save:
 
 1. **Drops anything undone by hand.** The ledger is narrowed to files that still
    differ from `HEAD`, so a `git restore` is a complete undo with no residue.
-2. **Commits exactly those files**, with `git commit --only`, which builds the
-   commit from the working-tree contents of the named paths and disregards
-   everything staged for any other path. That is the whole safety property: a
-   colleague's or an agent's half-finished work is neither committed nor
-   disturbed.
-3. **Reads the commit back** and compares its file list against what was asked
+2. **Rebuilds each file from the last commit.** It reads the content `HEAD`
+   holds for that path — never the working tree — and replays that file's
+   recorded substitutions on top of it, in the order they were made. What lands
+   is therefore the last commit plus this tool's own sentences, and nothing
+   else, whoever else is in that file at the time.
+3. **Refuses, per file, rather than guessing.** A file is left uncommitted, with
+   its edits in the working tree and its ledger entry intact, when the text one
+   of its edits replaced is no longer in the last commit's version (somebody
+   else changed that sentence, or the file was reformatted), when that text now
+   appears more than once so which occurrence was meant cannot be known, when
+   the file is not in the last commit at all, when somebody has staged changes
+   to it, or when the ledger holds no record of what its edits replaced. The
+   panel names the file and the reason. Refusing one file never stops the
+   others: what can be rebuilt is committed and the rest is reported.
+4. **Commits through a temporary index.** The content being committed exists
+   nowhere on disk, so the commit is made with plumbing — `read-tree` into a
+   throwaway index named by `GIT_INDEX_FILE`, a blob per file, `write-tree`,
+   `commit-tree`, and an `update-ref` that supplies the old value, so a branch
+   that moved underneath the save fails the write rather than losing a commit.
+   The real index, the working tree, and anybody else's staged work are never
+   touched. Afterwards the real index entry for each committed path is set to
+   the blob that landed, which is what keeps `git status` from showing the save
+   staged in reverse.
+5. **Reads the commit back** and compares its file list against what was asked
    for. A mismatch is reported and not pushed.
-4. **Pushes.** Plainly first; only a rejection brings in a fetch and a rebase
+6. **Pushes.** Plainly first; only a rejection brings in a fetch and a rebase
    with `--autostash`, so the common case never disturbs anyone. A rebase that
    cannot complete is aborted rather than left in progress, and the reason is
    shown. Set `EDIT_MODE_PUSH=never` and this step is skipped.
+
+Until version 1.0.2 step 2 was `git commit --only -- <files>`, which commits the
+working-tree content of the named paths. That is file-granular, and the second
+writer is usually in the same file rather than merely in the same tree: a save
+made while a coding agent had unfinished code further down the page committed
+that code too, on a branch that deploys, and the production build failed on it.
 
 A push that fails leaves the commit standing and says so — the work is safe, and
 it names what went wrong instead of pretending.
@@ -369,6 +397,14 @@ host's, so a production stylesheet has nothing of this in it even by accident.
   at an encoding. Write the character rather than the entity and it is editable.
 - **Two identical sentences with identical surroundings** still require a
   choice. That is the picker, and it is rare.
+- **No commit hook runs, and the commit is not signed.** The commit is assembled
+  with plumbing out of content that is not in the working tree, so a hook that
+  inspects the working tree could not judge it, and `commit.gpgsign` is not
+  honoured — signing inside a dev server could sit waiting on a passphrase.
+  `git push` still runs whatever pre-push hook the repository has.
+- **Cancel is still file-granular**, though Save is no longer: `git restore`
+  works on files, so reverting takes back the whole file. The confirmation says
+  so and names what rides along, which is why it asks.
 
 ## The files
 
@@ -378,13 +414,13 @@ host's, so a production stylesheet has nothing of this in it even by accident.
 | `src/copy-source.ts` | Finding a sentence in the source and rewriting it. The TypeScript AST work. |
 | `src/imports.ts` | Which files a page is made of — rung one of the ladder. |
 | `src/ledger.ts` | What has been written and not yet committed. |
-| `src/commit.ts` | The Save button's other half: commit exactly those files, push. |
+| `src/commit.ts` | The Save button's other half: rebuild those files from the last commit out of the recorded substitutions, commit, push. |
 | `src/revert.ts` | The Cancel button's other half: what a revert would take, and taking it. |
 | `src/routes.ts` | The three route handlers, as factories the host mounts. |
 | `src/git.ts` | The small amount of git, and the containment rule. |
 | `src/config.ts` | Everything a project might set, read from the environment. |
 | `install.mjs` | Mounting it in a project. |
-| `test/` | `npm test`. The engine is compiled to CommonJS and driven against a throwaway project, with `fs.promises.readFile` wrapped so another writer's edit lands inside the search window deterministically. |
+| `test/` | `npm test`. The engine is compiled to CommonJS and driven against a throwaway project, with `fs.promises.readFile` wrapped so another writer's edit lands inside the search window deterministically. The commit is driven against real throwaway git repositories, because every claim it makes is a claim about what git ends up holding. |
 
 ## License
 

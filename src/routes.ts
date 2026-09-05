@@ -76,9 +76,12 @@ export function createEditCopyRoute(): RouteHandlers {
           target,
         });
         if (result.status === "saved") {
+          // The substitution goes into the ledger with the file, because the
+          // commit is rebuilt from these rather than from the working tree.
           await recordEdit(
             result.file,
-            typeof payload.pagePath === "string" ? payload.pagePath : undefined
+            typeof payload.pagePath === "string" ? payload.pagePath : undefined,
+            { removed: result.removed, replacement: result.replacement }
           );
         }
         return json({ ...result, pending: await pendingEdits() });

@@ -28,9 +28,10 @@
  *
  * NOTHING IS COMMITTED UNTIL THE SAVE BUTTON IS PRESSED. Edits accumulate as
  * ordinary uncommitted changes in the working tree; the button commits exactly
- * the files this tool wrote, and pushes them unless `EDIT_MODE_PUSH` says not
- * to. An editor that committed on every keystroke would fill a history with
- * typing.
+ * the substitutions this tool made — rebuilt on top of the last commit, so
+ * nothing anybody else has typed in those files rides along — and pushes them
+ * unless `EDIT_MODE_PUSH` says not to. An editor that committed on every
+ * keystroke would fill a history with typing.
  *
  * SAVE AND CANCEL ARE BOTH PRESENT THE MOMENT THE MODE IS ON, and that is a
  * correction rather than a preference. Save used to appear only once the first
