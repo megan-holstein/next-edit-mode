@@ -23,6 +23,15 @@
  * discarded and the ladder moves on, so the worst an unseeable file can do is
  * fail to narrow the field.
  *
+ * A HOST WITH NO ROUTES GETS EMPTY ANSWERS RATHER THAN AN ERROR. Everything
+ * here is written in terms of a Next.js `app/` tree, and an Electron app has
+ * none: `entriesForPage` returns no entries and `routesMounting` maps every
+ * file to no routes, because the directory walk that would find the pages
+ * cannot read a directory that is not there. That is the right answer rather
+ * than a tolerated one — the ladder discards a filter that removes every
+ * candidate, so a host with no routes simply starts at rung two, and the picker
+ * shows its candidates without route labels.
+ *
  * Parsed specifiers are cached against each file's mtime, so the second question
  * of a session costs almost nothing while a file you just edited is re-read.
  */

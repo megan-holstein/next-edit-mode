@@ -10,6 +10,14 @@
  * part of it ships. The endpoints it posts to answer 404 outside development,
  * so even if it did ship it would have nothing to talk to.
  *
+ * IT TALKS TO A TRANSPORT RATHER THAN TO THREE URLS. A Next.js dev server hands
+ * it `fetchTransport`, which posts to the three routes on the same origin — the
+ * default, and what every project got before there was a choice. An Electron
+ * app hands it a transport whose five methods cross to the main process over
+ * IPC, because a locked-down renderer's content security policy forbids the
+ * fetch. Neither host changes anything below this line: the ring, the picker,
+ * the panel and the three tones are the same code either way.
+ *
  * IT IS RED ON PURPOSE. Every surface this file draws is red and white and
  * looks like nothing the host site ships — its own type, its own colour, not
  * one value borrowed from the page underneath. A tool that rewrites your source
@@ -42,15 +50,126 @@
  * nothing; a control that is present and greyed teaches what it is waiting for.
  */
 
-import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+/* The engine's reply shapes, as types only. `import type` is erased before a
+   bundler sees it — guaranteed here by `isolatedModules` — so the browser half
+   names the same shapes the Node half produces without ever reaching for a
+   module that imports `node:fs`. React is this file's only real import. */
+import type {
+  CommitReply,
+  EditBody,
+  EditReply,
+  PendingReply,
+  RevertPlanReply,
+  RevertReply,
+} from "./engine";
+
+/**
+ * The five things the overlay asks of the engine, and the only route between
+ * them. Whatever carries the call — an HTTP request to a dev server, an IPC
+ * message to an Electron main process — the values on either side are the same,
+ * so this file never learns which host it is running in.
+ */
+export type EditModeTransport = {
+  edit(body: EditBody): Promise<EditReply>;
+  pending(): Promise<PendingReply>;
+  commit(): Promise<CommitReply>;
+  revertPlan(page: string): Promise<RevertPlanReply>;
+  revert(page: string): Promise<RevertReply>;
+};
+
+/** A reply for a route that is not mounted, in the engine's own error shape. */
+const missing = (message: string) =>
+  ({ status: "error", message, tone: "alarm" }) as const;
+
+/**
+ * The default transport: three routes on the same origin, which is what a
+ * Next.js dev server mounts.
+ *
+ * The missing-endpoint alarm lives here rather than in the overlay, because it
+ * is a fact about HTTP and about nothing else — an IPC transport has no 404 to
+ * report, and an overlay that checked for one would be reading a status code
+ * that never arrives.
+ */
+export function fetchTransport(endpoints: {
+  editEndpoint: string;
+  commitEndpoint: string;
+  revertEndpoint: string;
+}): EditModeTransport {
+  const { editEndpoint, commitEndpoint, revertEndpoint } = endpoints;
+  return {
+    async edit(body) {
+      const response = await fetch(editEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (response.status === 404) {
+        return missing("The editing endpoint is not there. This only works on the dev server.");
+      }
+      return (await response.json()) as EditReply;
+    },
+    async pending() {
+      const response = await fetch(commitEndpoint);
+      if (!response.ok) {
+        return missing("The commit endpoint is not there. This only works on the dev server.");
+      }
+      return (await response.json()) as PendingReply;
+    },
+    async commit() {
+      const response = await fetch(commitEndpoint, { method: "POST" });
+      if (response.status === 404) {
+        return missing("The commit endpoint is not there. This only works on the dev server.");
+      }
+      return (await response.json()) as CommitReply;
+    },
+    async revertPlan(page) {
+      const response = await fetch(`${revertEndpoint}?page=${encodeURIComponent(page)}`);
+      if (!response.ok) {
+        return missing("The revert endpoint is not there. This only works on the dev server.");
+      }
+      return (await response.json()) as RevertPlanReply;
+    },
+    async revert(page) {
+      const response = await fetch(revertEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pagePath: page }),
+      });
+      return (await response.json()) as RevertReply;
+    },
+  };
+}
 
 export type EditModeProps = {
-  /** Where the host mounted the write route. */
+  /**
+   * How to reach the engine. Left out, the overlay talks to the three endpoints
+   * below over `fetch`, which is what a Next.js project wants and what every
+   * project had before there was a choice.
+   */
+  transport?: EditModeTransport;
+  /**
+   * What to call the page an edit was made from, which is the scope Cancel
+   * works in. A Next.js host passes `usePathname()`, so the counts follow a
+   * client navigation; an Electron host passes a screen name. Left out, the
+   * overlay reads `window.location.pathname` at the moment of each call, which
+   * is right on a full page load and goes stale on a navigation that does not
+   * reload — the reason to pass it.
+   */
+  page?: string;
+  /** Where the host mounted the write route. Used by the default transport. */
   editEndpoint?: string;
-  /** Where the host mounted the ledger + commit route. */
+  /** Where the host mounted the ledger + commit route. Likewise. */
   commitEndpoint?: string;
-  /** Where the host mounted the revert route. */
+  /** Where the host mounted the revert route. Likewise. */
   revertEndpoint?: string;
 };
 
@@ -303,12 +422,23 @@ function panelTone(status: Status): Tone | "progress" | "done" {
 }
 
 export function EditModeOverlay({
+  transport,
+  page,
   editEndpoint = "/api/dev/edit-copy",
   commitEndpoint = "/api/dev/commit-copy",
   revertEndpoint = "/api/dev/revert-copy",
 }: EditModeProps = {}) {
   const active = useSyncExternalStore(subscribeMode, readMode, modeOffOnServer);
-  const here = usePathname() ?? "/";
+  /* Memoised, because an unmemoised default would be a new object on every
+     render and the effect below would re-read the ledger on every one of them. */
+  const wire = useMemo(
+    () => transport ?? fetchTransport({ editEndpoint, commitEndpoint, revertEndpoint }),
+    [transport, editEndpoint, commitEndpoint, revertEndpoint]
+  );
+  /* The page a host named, or the address bar. The server render has neither,
+     and answers "/" as it always did. */
+  const here =
+    page ?? (typeof window === "undefined" ? "/" : window.location.pathname);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [pending, setPending] = useState<LedgerEntry[]>([]);
 
@@ -327,10 +457,10 @@ export function EditModeOverlay({
      (which does not reload, so `location` alone would go stale). */
   useEffect(() => {
     let cancelled = false;
-    fetch(commitEndpoint)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (!cancelled && body?.pending) setPending(body.pending);
+    wire
+      .pending()
+      .then((reply) => {
+        if (!cancelled && "pending" in reply) setPending(reply.pending);
       })
       .catch(() => {
         /* the route is not mounted, or the server is restarting */
@@ -338,7 +468,7 @@ export function EditModeOverlay({
     return () => {
       cancelled = true;
     };
-  }, [commitEndpoint, here]);
+  }, [wire, here]);
 
   const stopEditing = useCallback(() => {
     const current = editing.current;
@@ -357,28 +487,15 @@ export function EditModeOverlay({
     ) => {
       setStatus({ kind: "saving" });
       try {
-        const response = await fetch(editEndpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            oldText,
-            newText,
-            pagePath: window.location.pathname,
-            before: context?.before,
-            after: context?.after,
-            target: target ? { file: target.file, line: target.line } : undefined,
-          }),
+        const result = await wire.edit({
+          oldText,
+          newText,
+          pagePath: page ?? window.location.pathname,
+          before: context?.before,
+          after: context?.after,
+          target: target ? { file: target.file, line: target.line } : undefined,
         });
-        if (response.status === 404) {
-          setStatus({
-            kind: "error",
-            tone: "alarm",
-            message: "The editing endpoint is not there. This only works on the dev server.",
-          });
-          return;
-        }
-        const result = await response.json();
-        if (result.pending) setPending(result.pending);
+        if ("pending" in result) setPending(result.pending);
         if (result.status === "saved") {
           held.current = null;
           setStatus({
@@ -408,7 +525,7 @@ export function EditModeOverlay({
         });
       }
     },
-    [editEndpoint]
+    [wire, page]
   );
 
   /** Read what changed inside the element, then hand it to the server. */
@@ -607,17 +724,11 @@ export function EditModeOverlay({
   const saveAll = useCallback(async () => {
     setStatus({ kind: "committing" });
     try {
-      const response = await fetch(commitEndpoint, { method: "POST" });
-      if (response.status === 404) {
-        setStatus({
-          kind: "error",
-          tone: "alarm",
-          message: "The commit endpoint is not there. This only works on the dev server.",
-        });
-        return;
-      }
-      const result = await response.json();
-      setPending(result.pending ?? []);
+      const result = await wire.commit();
+      /* A reply with no pending list is one the engine caught a failure for,
+         and a failed commit has not changed what is waiting. Zeroing the counts
+         there would tell the writer their edits had gone. */
+      if ("pending" in result) setPending(result.pending);
       if (result.status === "committed") {
         setStatus({
           kind: "committed",
@@ -640,24 +751,17 @@ export function EditModeOverlay({
         message: error instanceof Error ? error.message : "The commit failed.",
       });
     }
-  }, [commitEndpoint]);
+  }, [wire]);
 
   /** What Cancel would take, asked of the server before anything is destroyed. */
   const askRevert = useCallback(async () => {
     try {
-      const response = await fetch(
-        `${revertEndpoint}?page=${encodeURIComponent(window.location.pathname)}`
-      );
-      if (!response.ok) {
-        setStatus({
-          kind: "error",
-          tone: "alarm",
-          message: "The revert endpoint is not there. This only works on the dev server.",
-        });
+      const reply = await wire.revertPlan(page ?? window.location.pathname);
+      if (!("plan" in reply)) {
+        setStatus({ kind: "error", tone: reply.tone, message: reply.message });
         return;
       }
-      const body = await response.json();
-      const plan: RevertPlan | undefined = body.plan;
+      const plan: RevertPlan | undefined = reply.plan;
       if (!plan || plan.files.length === 0) {
         setStatus({ kind: "error", tone: "note", message: "Nothing on this page to revert." });
         return;
@@ -670,18 +774,13 @@ export function EditModeOverlay({
         message: error instanceof Error ? error.message : "Could not read what to revert.",
       });
     }
-  }, [revertEndpoint]);
+  }, [wire, page]);
 
   const doRevert = useCallback(async () => {
     setStatus({ kind: "reverting" });
     try {
-      const response = await fetch(revertEndpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pagePath: window.location.pathname }),
-      });
-      const result = await response.json();
-      setPending(result.pending ?? []);
+      const result = await wire.revert(page ?? window.location.pathname);
+      if ("pending" in result) setPending(result.pending);
       if (result.status === "reverted") {
         setStatus({ kind: "reverted", message: result.message });
         // The files on disk have moved back; the page in the browser has not.
@@ -700,7 +799,7 @@ export function EditModeOverlay({
         message: error instanceof Error ? error.message : "The revert failed.",
       });
     }
-  }, [revertEndpoint]);
+  }, [wire, page]);
 
   const waiting = pending.reduce((total, entry) => total + entry.edits, 0);
   const onThisPage = pending.filter((entry) => entry.pages.includes(here));

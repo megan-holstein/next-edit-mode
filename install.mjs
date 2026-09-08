@@ -129,6 +129,8 @@ const stubs = {
  * always — so the type-checker never needs the tool either.
  */
 export type EditModeProps = {
+  transport?: unknown;
+  page?: string;
   editEndpoint?: string;
   commitEndpoint?: string;
   revertEndpoint?: string;
@@ -214,7 +216,10 @@ if (fs.existsSync(mountFile)) {
   fs.mkdirSync(path.dirname(mountFile), { recursive: true });
   fs.writeFileSync(
     mountFile,
-    `import dynamic from "next/dynamic";
+    `"use client";
+
+import dynamic from "next/dynamic";
+import { usePathname } from "next/navigation";
 
 /**
  * The mount point for inline copy editing, and the boundary that keeps it off
@@ -229,6 +234,13 @@ if (fs.existsSync(mountFile)) {
  * because a runtime \`if\` would still ship the code it declines to run. And the
  * specifier resolves to a committed stand-in outside development anyway, so
  * neither half of the guarantee rests on the other.
+ *
+ * It is a CLIENT component, because it reads the current route with
+ * \`usePathname\` and hands it to the overlay as \`page\`. That is what scopes
+ * Cancel to the page you are on and keeps the counts on Save and Cancel right
+ * after a click through the nav, which does not reload the document. Marking it
+ * a client component costs the deployed site nothing: in a production build the
+ * ternary above is constant, the import is dead, and this function returns null.
  */
 const Overlay =
   process.env.NODE_ENV === "development"
@@ -236,8 +248,12 @@ const Overlay =
     : null;
 
 export function DevEditMode() {
+  /* The page the overlay scopes Cancel to, and the value that makes the two
+     counts follow a client navigation — which does not reload, so the address
+     read once at mount would go stale the first time you click the nav. */
+  const page = usePathname() ?? "/";
   if (!Overlay) return null;
-  return <Overlay />;
+  return <Overlay page={page} />;
 }
 `
   );
