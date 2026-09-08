@@ -1,6 +1,6 @@
 {
-  "name": "next-edit-mode",
-  "version": "1.1.0",
+  "name": "edit-mode",
+  "version": "2.0.0",
   "description": "Development-only inline copy editing for Next.js dev servers and Electron apps: click a sentence on the page, type over it, and the source file that produced it is rewritten.",
   "keywords": [
     "nextjs",
@@ -17,13 +17,13 @@
   "author": "Holstein Creations LLC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/megan-holstein/next-edit-mode.git"
+    "url": "git+https://github.com/megan-holstein/edit-mode.git"
   },
-  "homepage": "https://github.com/megan-holstein/next-edit-mode#readme",
-  "bugs": "https://github.com/megan-holstein/next-edit-mode/issues",
+  "homepage": "https://github.com/megan-holstein/edit-mode#readme",
+  "bugs": "https://github.com/megan-holstein/edit-mode/issues",
   "type": "module",
   "bin": {
-    "next-edit-mode": "./install.mjs"
+    "edit-mode": "./install.mjs"
   },
   "exports": {
     "./overlay": "./src/overlay.tsx",

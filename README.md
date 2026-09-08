@@ -23,6 +23,12 @@ answer 404 anywhere but a development server.
   [ Save 3 · commit 2 files and push ]   [ Cancel 1 · revert this page ]
 ```
 
+The package and the repository were called `next-edit-mode` until 2.0.0,
+after the dev server that was then its only host; a second host made the
+prefix a misdescription, so the name is now the one the folder, the
+environment variables and the import alias had always used. GitHub redirects
+the old repository URL.
+
 ## Requirements
 
 There are two hosts, and the engine behind them is one piece of code.
@@ -46,7 +52,7 @@ compiler it parses with is the host project's.
 **In a Next.js project, the installer does it**, exactly as it always has:
 
 ```sh
-git clone https://github.com/megan-holstein/next-edit-mode.git ~/tools/edit-mode
+git clone https://github.com/megan-holstein/edit-mode.git ~/tools/edit-mode
 node ~/tools/edit-mode/install.mjs /path/to/your/project
 ```
 
@@ -73,7 +79,7 @@ three pieces described under [Hosting it in an Electron
 app](#hosting-it-in-an-electron-app):
 
 ```sh
-npm install github:megan-holstein/next-edit-mode#v1.1.0
+npm install github:megan-holstein/edit-mode#v2.0.0
 ```
 
 ```
@@ -290,7 +296,7 @@ import {
   handlePending,
   handleRevert,
   handleRevertPlan,
-} from "next-edit-mode/engine";
+} from "edit-mode/engine";
 
 configure({
   projectRoot: app.getAppPath(),
@@ -353,7 +359,7 @@ contextBridge.exposeInMainWorld("editMode", {
 
 ```tsx
 // wherever the app draws its development furniture
-import { EditModeOverlay } from "next-edit-mode/overlay";
+import { EditModeOverlay } from "edit-mode/overlay";
 
 <EditModeOverlay transport={window.editMode} page={currentScreenName} />;
 ```
@@ -485,7 +491,7 @@ one person's preference never lands in a shared repository.
 
 An embedding host sets the same five values in code instead, with
 `configure({ projectRoot, sourceDirectory, ledgerPath, push, commitSubject })`
-from `next-edit-mode/engine`. What a host configures outranks the environment,
+from `edit-mode/engine`. What a host configures outranks the environment,
 and the environment outranks the defaults above; a host that never calls
 `configure()` reads exactly what it read before the function existed.
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0.0
+
+Renames the package and the repository. The tool is `edit-mode`.
+
+- **The `next-` prefix stopped describing it.** The tool was written for a
+  Next.js dev server and named for it; since 1.1.0 it runs inside an Electron
+  application as well, and one of its two hosts has nothing to do with Next.js.
+  `edit-mode` is what the folder, the `EDIT_MODE_*` variables, the
+  `#edit-mode/…` import alias and the `.edit-mode/` directory have called it all
+  along, so the package and the repository now say the same thing.
+- **The major is cut for the import specifiers.** Every one of them changes —
+  `next-edit-mode/engine` becomes `edit-mode/engine`, `next-edit-mode/overlay`
+  becomes `edit-mode/overlay` — and so does a git-tag dependency, which a host
+  updates to `github:megan-holstein/edit-mode#v2.0.0`. A rename a host has to
+  act on is a breaking change whatever else moved.
+- **Nothing in the tool's behaviour changed between 1.1.0 and 2.0.0.** The
+  engine, the routes, the overlay, the installer's output, the commit, the
+  ledger and the security model are byte for byte what they were.
+- **GitHub redirects the old repository URL**, so an existing
+  `github:megan-holstein/next-edit-mode#v1.1.0` dependency goes on resolving
+  until somebody updates it. Nothing breaks the day this lands.
+
 ## 1.1.0
 
 Adds a second host. The tool can now be mounted by an Electron application as
