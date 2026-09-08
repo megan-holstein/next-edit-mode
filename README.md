@@ -25,14 +25,25 @@ answer 404 anywhere but a development server.
 
 ## Requirements
 
-Next.js with the App Router, TypeScript, and `typescript` present in the
-project's own `node_modules` — which it is, or the project would not build. The
-package declares no runtime dependencies of its own and vendors nothing; the
+There are two hosts, and the engine behind them is one piece of code.
+
+**A Next.js dev server**, on the App Router, with TypeScript and `typescript`
+present in the project's own `node_modules` — which it is, or the project would
+not build. Both project layouts are supported: `src/app/…` and a top-level
+`app/…`. Nothing about this path has changed.
+
+**An Electron application** that runs from its own checkout, which mounts the
+engine in the main process and the overlay in the renderer. See [Hosting it in
+an Electron app](#hosting-it-in-an-electron-app) for the three pieces it wires.
+Such a host needs no `app/` directory and no Next.js at all; `next` is an
+optional peer dependency.
+
+The package declares no runtime dependencies of its own and vendors nothing; the
 compiler it parses with is the host project's.
 
-Both project layouts are supported: `src/app/…` and a top-level `app/…`.
-
 ## Installing it in a project
+
+**In a Next.js project, the installer does it**, exactly as it always has:
 
 ```sh
 git clone https://github.com/megan-holstein/next-edit-mode.git ~/tools/edit-mode
@@ -55,6 +66,15 @@ the layout — is never touched.
 
 Run the same command again whenever the tool changes; that is how a project
 picks up a new version.
+
+**In an Electron application, there is no installer**, because everything it
+writes is Next.js scaffolding. Take the package as a dependency and wire the
+three pieces described under [Hosting it in an Electron
+app](#hosting-it-in-an-electron-app):
+
+```sh
+npm install github:megan-holstein/next-edit-mode#v1.1.0
+```
 
 ```
 install [project-dir] [--src <dir>]
@@ -247,6 +267,123 @@ would remove every candidate** — which is what happens for markdown read at
 runtime with `fs`, since no import reaches it. A filter that empties the field
 has learned nothing and is not trusted over the field it emptied.
 
+## Hosting it in an Electron app
+
+The tool has a second host, and it is the same tool. An Electron application
+that runs from a checkout — a desktop app whose own source holds the copy it
+renders — mounts this engine and this overlay unchanged. What differs is the
+wire between them. The engine runs in the main process, which is Node and has
+been all along; the overlay runs in the renderer, which reaches the main process
+over IPC rather than over HTTP.
+
+**The engine runs in the main process, and it is configured in code.** A dev
+server has no channel but `process.env` and no project root but
+`process.cwd()`; an Electron main process knows both at startup, because it is
+the application that was launched from the checkout, so it says so:
+
+```ts
+import { app, ipcMain } from "electron";
+import {
+  configure,
+  handleCommit,
+  handleEdit,
+  handlePending,
+  handleRevert,
+  handleRevertPlan,
+} from "next-edit-mode/engine";
+
+configure({
+  projectRoot: app.getAppPath(),
+  sourceDirectory: "src",
+  ledgerPath: ".edit-mode/ledger.json",
+  push: false,
+});
+
+// Arm the handlers in an unpackaged build only. `app.isPackaged` is the
+// plainest form of that decision; a development switch of your own serves
+// as well, and the choice belongs to the host rather than to this tool.
+if (!app.isPackaged) {
+  ipcMain.handle("edit-mode:edit", (_event, body) => handleEdit(body));
+  ipcMain.handle("edit-mode:pending", () => handlePending());
+  ipcMain.handle("edit-mode:commit", () => handleCommit());
+  ipcMain.handle("edit-mode:revert-plan", (_event, page) => handleRevertPlan(page));
+  ipcMain.handle("edit-mode:revert", (_event, page) => handleRevert(page));
+}
+```
+
+Every handler answers with a value and none of them throws, so an IPC channel
+carries a reply the overlay can render rather than a rejection the renderer has
+to interpret. `configure()` is optional in the sense that the defaults suit a
+Next.js project; in an Electron host it is not, since `process.cwd()` there is
+wherever the application was launched from and the ledger has no `.next` to live
+in.
+
+**The overlay mounts in the renderer with a transport.** The five methods are
+the whole contract:
+
+```ts
+type EditModeTransport = {
+  edit(body: EditBody): Promise<EditReply>;
+  pending(): Promise<PendingReply>;
+  commit(): Promise<CommitReply>;
+  revertPlan(page: string): Promise<RevertPlanReply>;
+  revert(page: string): Promise<RevertReply>;
+};
+```
+
+They cross the process boundary through the preload's `contextBridge`, because
+a renderer locked down the way an Electron renderer should be — context
+isolation on, node integration off, a content security policy that names its
+own origin — refuses a `fetch` to a side channel, and answering that by
+loosening the policy would trade the application's security for a development
+convenience. IPC is the route Electron already provides.
+
+```ts
+// preload.ts
+import { contextBridge, ipcRenderer } from "electron";
+
+contextBridge.exposeInMainWorld("editMode", {
+  edit: (body: unknown) => ipcRenderer.invoke("edit-mode:edit", body),
+  pending: () => ipcRenderer.invoke("edit-mode:pending"),
+  commit: () => ipcRenderer.invoke("edit-mode:commit"),
+  revertPlan: (page: string) => ipcRenderer.invoke("edit-mode:revert-plan", page),
+  revert: (page: string) => ipcRenderer.invoke("edit-mode:revert", page),
+});
+```
+
+```tsx
+// wherever the app draws its development furniture
+import { EditModeOverlay } from "next-edit-mode/overlay";
+
+<EditModeOverlay transport={window.editMode} page={currentScreenName} />;
+```
+
+**Pass a `page`.** It is the scope Cancel works in: the ledger records which
+page each edit was made from, and Cancel reverts the files that page
+contributed rather than the afternoon's work. A browser supplies the answer for
+free in its address bar, and an application has no address bar, so name the
+screen — `"settings"`, `"onboarding/welcome"`, whatever the application already
+calls it. Left out, the overlay falls back to `window.location.pathname`, which
+in a single-document application is one value forever, which makes Cancel
+session-wide.
+
+**The security model's argument transfers intact.** It never rested on a
+password: the only machine that can reach the engine is one running the
+checkout, and whoever runs that already has a shell, an editor and write access
+to every file the tool could touch. In an Electron host the argument is if
+anything narrower, since the channel is IPC inside one application rather than a
+port on the loopback interface. The containment rule is unchanged and is still
+enforced in the engine rather than promised by the host: every candidate path is
+resolved and checked against the source directory before anything is opened, so
+your config, your scripts and your lockfile stay unreachable whatever a message
+asks for. What the host owes in return is the one thing only the host knows —
+that the handlers are armed in a development build and in no other.
+
+**The installer plays no part in this.** `install.mjs` writes Next.js route
+files, Next.js stand-ins and a Next.js mount component, none of which an
+Electron application has any use for. Such a host takes the package as an
+ordinary dependency and wires the three pieces above itself.
+
 ## Saving: the ledger, and what the button commits
 
 **Nothing is committed automatically.** Edits pile up as ordinary uncommitted
@@ -346,10 +483,30 @@ one person's preference never lands in a shared repository.
 | `EDIT_MODE_COMMIT_SUBJECT` | `Copy: edited in place from the browser` | The subject line of the commit Save makes. |
 | `EDIT_MODE_LEDGER` | `.next/cache/edit-mode-ledger.json` | Where the record of uncommitted edits is kept. |
 
-The overlay takes three props, for a project that mounts the routes somewhere
-other than `/api/dev`: `editEndpoint`, `commitEndpoint`, `revertEndpoint`. They
-go in the mount component the installer wrote, which is the one file it never
-overwrites.
+An embedding host sets the same five values in code instead, with
+`configure({ projectRoot, sourceDirectory, ledgerPath, push, commitSubject })`
+from `next-edit-mode/engine`. What a host configures outranks the environment,
+and the environment outranks the defaults above; a host that never calls
+`configure()` reads exactly what it read before the function existed.
+
+The overlay takes five props, all optional. `transport` replaces the three
+`fetch` calls, which is how an Electron renderer reaches the engine over IPC.
+`page` names the page an edit was made from, which is the scope Cancel works
+in; a Next.js mount passes `usePathname()` and an application passes a screen
+name. `editEndpoint`, `commitEndpoint` and `revertEndpoint` are for a project
+that mounts the routes somewhere other than `/api/dev`, and the default
+transport is the only thing that reads them. They go in the mount component the
+installer wrote, which is the one file it never overwrites — so a project
+installed before 1.1.0 keeps working untouched, through the fallback that reads
+`window.location.pathname`, and picks up navigation-aware counts by adding the
+one prop:
+
+```tsx
+"use client";
+import { usePathname } from "next/navigation";
+// ...
+return <Overlay page={usePathname() ?? "/"} />;
+```
 
 ## Three tiers, dressed differently
 
@@ -380,8 +537,12 @@ host's, so a production stylesheet has nothing of this in it even by accident.
 
 ## Known limits
 
-- **Next.js App Router only.** The Pages Router is not modelled, and neither is
-  any other framework.
+- **Route narrowing is App Router only.** Rung one of the ladder — the route a
+  page's files hang off — reads a Next.js `app/` tree and nothing else. The
+  Pages Router is not modelled, and neither is any other framework. A host with
+  no such tree, an Electron application above all, loses that rung and keeps the
+  other two: the narrowing simply finds nothing, which is the same answer it
+  gives for markdown a project reads at runtime.
 - **Turbopack is the assumed bundler** for the alias described in the installer
   output. A Webpack project needs the equivalent `resolve.alias` entry instead;
   nothing else changes.
@@ -416,7 +577,8 @@ host's, so a production stylesheet has nothing of this in it even by accident.
 | `src/ledger.ts` | What has been written and not yet committed. |
 | `src/commit.ts` | The Save button's other half: rebuild those files from the last commit out of the recorded substitutions, commit, push. |
 | `src/revert.ts` | The Cancel button's other half: what a revert would take, and taking it. |
-| `src/routes.ts` | The three route handlers, as factories the host mounts. |
+| `src/engine.ts` | The five things the tool does, in plain values, with no transport around them. Both hosts import this. |
+| `src/routes.ts` | The three route handlers, as factories the Next.js host mounts. HTTP and nothing else. |
 | `src/git.ts` | The small amount of git, and the containment rule. |
 | `src/config.ts` | Everything a project might set, read from the environment. |
 | `install.mjs` | Mounting it in a project. |

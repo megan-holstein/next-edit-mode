@@ -1,9 +1,10 @@
 {
   "name": "next-edit-mode",
-  "version": "1.0.3",
-  "description": "Development-only inline copy editing for Next.js: click a sentence on the page, type over it, and the source file that produced it is rewritten.",
+  "version": "1.1.0",
+  "description": "Development-only inline copy editing for Next.js dev servers and Electron apps: click a sentence on the page, type over it, and the source file that produced it is rewritten.",
   "keywords": [
     "nextjs",
+    "electron",
     "wysiwyg",
     "inline-editing",
     "copy-editing",
@@ -26,6 +27,7 @@
   },
   "exports": {
     "./overlay": "./src/overlay.tsx",
+    "./engine": "./src/engine.ts",
     "./routes": "./src/routes.ts",
     "./install": "./install.mjs"
   },
@@ -43,6 +45,11 @@
     "next": ">=15",
     "react": ">=18",
     "typescript": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22",

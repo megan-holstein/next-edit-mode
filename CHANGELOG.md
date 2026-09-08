@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.1.0
+
+Adds a second host. The tool can now be mounted by an Electron application as
+well as by a Next.js dev server, and the two share one engine rather than one
+each.
+
+- **`src/engine.ts` holds what the tool does, in plain values.** Five async
+  functions — edit, pending, commit, revert-plan, revert — take and return
+  ordinary objects, so a host carries the values in over whatever channel it
+  has and carries the reply out. None of them throws: a failure underneath
+  comes back as `{ status: "error", message, tone: "alarm" }`, which a host can
+  render rather than interpret, and which is told apart from a refusal the
+  engine reasoned its way to by carrying no `pending` list or `plan` beside it.
+- **`routes.ts` is now HTTP and nothing else** — the 404 outside development,
+  the 400 on a malformed request, and which status code a reply deserves. Every
+  route answers exactly what it answered before, for every input.
+- **`configure()` sets in code what the environment used to set alone.** An
+  embedding host owns its process and knows where the checkout is; a dev server
+  has neither, which is why the environment was the only channel. What a host
+  configures outranks the environment, and the environment outranks the
+  defaults. A host that never calls it reads what it always read.
+- **The overlay talks to a transport rather than to three URLs, and imports
+  nothing from Next.js.** `fetchTransport` is the default and posts to the same
+  three endpoints, so a browser sees no difference; an Electron renderer passes
+  a transport whose five methods cross to the main process over IPC, because a
+  renderer locked down properly refuses a `fetch` to a side channel. The page an
+  edit was made from arrives as a `page` prop instead of from `usePathname`,
+  which is how Cancel keeps a scope in an application that has no address bar.
+  The ring, the picker, the panel, the three tones and the stylesheet are
+  untouched.
+- **No behaviour of the Next.js host changed.** The routes, the installer's
+  output, the endpoints, the messages and the security model are as they were.
+  The one thing a Next.js project may now do is pass `page={usePathname()}` to
+  the overlay, which makes the counts on Save and Cancel follow a click through
+  the nav; the installer writes that into a new mount component, and a project
+  installed before 1.1.0 keeps working untouched through the fallback that reads
+  `window.location.pathname`.
+- `npm test` — the engine's error shape, the route narrowing degrading to
+  nothing in a project with no `app/` directory, the order settings are read in,
+  and a tripwire that fails if `overlay.tsx` ever imports from `next/` again.
+
 ## 1.0.3
 
 Fixes the ring drawn around a run of text that wraps.
